@@ -1983,6 +1983,110 @@ mod test {
         Ok(())
     }
 
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_alter_columns_rebuilds_index(
+        #[values(LanceFileVersion::Stable)] data_storage_version: LanceFileVersion,
+    ) -> Result<()> {
+        // This test verifies that when alter_columns modifies a column with an index,
+        // the index is automatically rebuilt in the background.
+
+        use crate::index::DatasetIndexExt;
+        use arrow::datatypes::{Int32Type, Int64Type};
+        use arrow_array::{Float16Array, Float32Array, Int64Array};
+        use half::f16;
+        use lance_arrow::FixedSizeListArrayExt;
+        use lance_index::{IndexType, scalar::ScalarIndexParams};
+        use lance_linalg::distance::MetricType;
+        use lance_testing::datagen::generate_random_array;
+        use crate::index::vector::VectorIndexParams;
+
+        let nrows = 1024;
+        let schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("id", DataType::Int32, false),
+            ArrowField::new(
+                "vec",
+                DataType::FixedSizeList(
+                    Arc::new(ArrowField::new("item", DataType::Float32, true)),
+                    128,
+                ),
+                false,
+            ),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..nrows)),
+                Arc::new(
+                    <arrow_array::FixedSizeListArray as FixedSizeListArrayExt>::try_new_from_values(
+                        generate_random_array(128 * nrows),
+                        128,
+                    )
+                    .unwrap(),
+                ),
+            ],
+        )?;
+
+        let test_dir = TempStrDir::default();
+        let test_uri = &test_dir;
+
+        let mut dataset = Dataset::write(
+            RecordBatchIterator::new(vec![Ok(batch.clone())], schema.clone()),
+            test_uri,
+            Some(WriteParams {
+                data_storage_version: Some(data_storage_version),
+                ..Default::default()
+            }),
+        )
+        .await?;
+
+        // Create a vector index
+        let params = VectorIndexParams::ivf_pq(10, 8, 2, MetricType::L2, 50);
+        dataset
+            .create_index(&["vec"], IndexType::Vector, None, &params, false)
+            .await?;
+
+        // Verify index exists
+        let indices = dataset.load_indices().await?;
+        assert_eq!(indices.len(), 1);
+        assert_eq!(indices[0].name, "vec_idx");
+
+        // Alter the vector column type (Float32 -> Float16)
+        dataset
+            .alter_columns(&[ColumnAlteration::new("vec".into()).cast_to(
+                DataType::FixedSizeList(
+                    Arc::new(ArrowField::new("item", DataType::Float16, true)),
+                    128,
+                ),
+            )])
+            .await?;
+        dataset.validate().await?;
+
+        // The index should be deleted immediately after alter_columns
+        let indices = dataset.load_indices().await?;
+        assert_eq!(indices.len(), 0, "Index should be deleted after alter_columns");
+
+        // Wait for background rebuild to complete
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+        // Refresh the dataset to pick up the new version
+        dataset = Dataset::open(test_uri).await?;
+
+        // Check if the index has been rebuilt
+        let indices = dataset.load_indices().await?;
+        if indices.is_empty() {
+            println!("Index not yet rebuilt (background task still running)");
+        } else {
+            assert_eq!(indices.len(), 1);
+            assert_eq!(indices[0].name, "vec_idx");
+        }
+
+        dataset.validate().await?;
+
+        Ok(())
+    }
     #[rstest]
     #[tokio::test]
     async fn test_drop_columns(

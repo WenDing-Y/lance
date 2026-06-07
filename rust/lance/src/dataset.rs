@@ -76,6 +76,7 @@ pub mod delta;
 pub mod fragment;
 mod hash_joiner;
 pub mod index;
+pub mod index_rebuild;
 pub mod mem_wal;
 mod metadata;
 pub mod optimize;

@@ -366,3 +366,48 @@ mod tests {
         }
     }
 }
+
+/// Parameters needed to rebuild an index after schema alteration.
+///
+/// This struct is serialized to disk when an index is deleted due to
+/// alter_columns, so that the index can be rebuilt later.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct IndexRebuildParams {
+    /// Name of the column the index was built on.
+    pub column: String,
+    /// Index type (e.g., "IVF_PQ", "HNSW", "IVF_HNSW_PQ").
+    pub index_type: String,
+    /// Distance type (e.g., "L2", "Cosine", "Dot").
+    pub distance_type: String,
+    /// For IVF indices: target number of vectors per partition.
+    pub target_partition_size: Option<u64>,
+    /// For PQ compression: number of bits per centroid.
+    pub num_bits: Option<u32>,
+    /// For PQ compression: number of sub-vectors.
+    pub num_sub_vectors: Option<u32>,
+    /// For SQ compression: number of bits.
+    pub sq_num_bits: Option<u32>,
+    /// For HNSW: maximum number of connections.
+    pub hnsw_m: Option<u32>,
+    /// For HNSW: construction ef parameter.
+    pub hnsw_ef_construction: Option<u32>,
+    /// For HNSW: maximum level.
+    pub hnsw_max_level: Option<u32>,
+}
+
+impl Default for IndexRebuildParams {
+    fn default() -> Self {
+        Self {
+            column: String::new(),
+            index_type: String::new(),
+            distance_type: String::new(),
+            target_partition_size: None,
+            num_bits: None,
+            num_sub_vectors: None,
+            sq_num_bits: None,
+            hnsw_m: None,
+            hnsw_ef_construction: None,
+            hnsw_max_level: None,
+        }
+    }
+}
